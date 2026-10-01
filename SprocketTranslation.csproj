@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>SprocketTranslation</AssemblyName>
+    <RootNamespace>SprocketTranslation</RootNamespace>
+    <Version>1.0.0</Version>
+    <Description>Harmony-only Chinese translation plugin for Sprocket (Unity 6 IL2CPP). No type injection.</Description>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Plugin.cs" />
+  </ItemGroup>
+
+  <!-- 词条密文（entries.bin）不随仓库分发：有它就嵌进 DLL，没有也能正常构建，
+       插件会打一行警告并只加载外部 Translations\*.txt（见 Plugin.cs 的 LoadEmbeddedTranslations）。 -->
+  <ItemGroup>
+    <EmbeddedResource Include="entries.bin" LogicalName="SprocketTranslation.entries.bin" Condition="Exists('entries.bin')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx.Core">
+      <HintPath>libs\BepInEx.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx.Unity.IL2CPP">
+      <HintPath>libs\BepInEx.Unity.IL2CPP.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>libs\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppInterop.Runtime">
+      <HintPath>libs\Il2CppInterop.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
