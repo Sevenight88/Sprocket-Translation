@@ -18,6 +18,17 @@ Sprocket的简体中文汉化插件，
 `Plugin.cs` 里，这层加密对能读代码的人无效。它仍能挡住"复制 txt 改个署名"这类最常见的行为，
 因此予以保留，但它不是安全机制，不应被当作安全机制看待。
 
+## 仓库文件
+
+| 文件 | 作用 |
+| --- | --- |
+| `Plugin.cs` | 插件本体，单文件：配置项注册、逐个方法手工 `harmony.Patch` 的 TextMeshPro 文本挂点、词条表的装载与查找顺序（精确 → 数字模板 → 旧模板 → 通配）、中文字体加载与回退、采集模式写 `_ExtractedText.txt` |
+| `SprocketTranslation.csproj` | 构建脚本：只引用 `libs/` 的 4 个框架程序集，不引用游戏类型；`entries.bin` 存在则作为嵌入资源打进 DLL，缺失时照常构建 |
+| `docs/ENTRIES.md` | 外部词条文件的格式说明：`原文=译文` 的分隔规则、`\n \r \t \=` 四种转义、`{{A}}` 数字模板、`*` 通配、目录加载顺序与常见坑 |
+| `libs/README.md` | 构建所需 4 个框架 DLL 的来源与放置位置；这些第三方二进制不入库 |
+| `LICENSE` | MIT 许可与版权声明 |
+| `.gitignore` / `.gitattributes` | 排除 `bin/`、`obj/`、`libs/*.dll` 与词条密文 `entries.bin`；统一文本行尾 |
+
 ## 编译
 
 前置：.NET 6 SDK，以及 `libs/` 里的 4 个框架 DLL（见 `libs/README.md`，从 BepInEx 6 的 `BepInEx\core\` 拷）。
