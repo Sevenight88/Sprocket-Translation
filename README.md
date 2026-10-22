@@ -22,7 +22,7 @@ Sprocket的简体中文汉化插件，
 
 | 文件 | 作用 |
 | --- | --- |
-| `Plugin.cs` | 插件本体，单文件：配置项注册、逐个方法手工 `harmony.Patch` 的 TextMeshPro 文本挂点、词条表的装载与查找顺序（精确 → 数字模板 → 旧模板 → 通配）、中文字体加载与回退、采集模式写 `_ExtractedText.txt` |
+| `Plugin.cs` | 插件本体，单文件：配置项注册、逐个方法手工 `harmony.Patch` 的 TextMeshPro 文本挂点（含 `SetText` 格式重载与预置文本的 `Awake`/`OnEnable`）、词条表的装载与查找顺序（精确 → 数字模板 → 旧模板 → 通配）、中文字体加载与回退、采集模式写 `_ExtractedText.txt` |
 | `SprocketTranslation.csproj` | 构建脚本：只引用 `libs/` 的 4 个框架程序集，不引用游戏类型；`entries.bin` 存在则作为嵌入资源打进 DLL，缺失时照常构建 |
 | `docs/ENTRIES.md` | 外部词条文件的格式说明：`原文=译文` 的分隔规则、`\n \r \t \=` 四种转义、`{{A}}` 数字模板、`*` 通配、目录加载顺序与常见坑 |
 | `libs/README.md` | 构建所需 4 个框架 DLL 的来源与放置位置；这些第三方二进制不入库 |
@@ -44,8 +44,11 @@ dotnet build SprocketTranslation.csproj -c Release
 
 ```
 <游戏根目录>\BepInEx\plugins\SprocketTranslation.dll
-<游戏根目录>\Fonts\Alibaba-PuHuiTi-Medium.ttf     ← 默认字体方案，见下面 FontFile
+<游戏根目录>\Fonts\Alibaba-PuHuiTi-Regular.ttf   ← 默认字体（常规字重）
+<游戏根目录>\Fonts\Alibaba-PuHuiTi-Medium.ttf    ← 备用字重（稍粗），喜欢重一点把 FontFile 改成它
 ```
+
+两份自带字体都随发行包分发，放哪一份都能用；只需 `Fonts\` 里有 `FontFile` 写的那个文件名。
 
 游戏需要先装 BepInEx 6（IL2CPP 版）。首次启动会校验/生成 interop，加载偏慢，属正常。
 
@@ -58,7 +61,8 @@ dotnet build SprocketTranslation.csproj -c Release
 | `General.TranslationEnabled` | `true` | 关掉后显示游戏原文，但**仍加载中文字体**（只想支持中文输入、不要汉化的场合） |
 | `General.ExtractionMode` | `false` | 把未翻译的原文（数字换成 `{{A}}` 占位符）追加到 `Translations\_ExtractedText.txt`，用来补词条 |
 | `General.FormatHooksEnabled` | `true` | 是否钩住 TMP 的 `SetText(string, float/bool…)` 格式重载，用来翻译 `Weight: {0}` 这类动态文本；怀疑界面卡顿时可单独关掉排除 |
-| `Font.FontFile` | `Alibaba-PuHuiTi-Medium.ttf` | 中文字体来源：TTF 文件名/路径、Unity 6 TMP 字体资源包名，或系统字体名（系统动态字体在部分机器会缺字变方框，不推荐） |
+| `General.TranslateBakedText` | `true` | 是否翻译**预置在场景/预制体里的文本**：这类标签代码从不调用文本接口，只随组件启用一次，只钩 `set_text` 的方案看不见它们（新建阵营弹窗的 Faction name / Design name prefix / Starter blueprints 就是这样漏网的）。设为 `false` 连钩子都不挂，不产生启动与启用开销 |
+| `Font.FontFile` | `Alibaba-PuHuiTi-Regular.ttf` | 中文字体来源：自带 TTF 的文件名/路径（`Regular` 或 `Medium`）、Unity 6 TMP 字体资源包名，或系统字体名（系统动态字体在部分机器会缺字变方框，不推荐）。老配置里写死 `Medium` 的会自动改用 `Regular` |
 | `Font.FallbackFontNames` | `Microsoft YaHei,SimHei,SimSun,NSimSun,Noto Sans SC` | 上面加载失败时依次尝试的系统字体名 |
 | `Font.ReplaceDefaultFont` | `false` | `false` = 只做回退（推荐，英文原文保持官方字形外观）；`true` = 替换 TMP 默认字体，全局用汉化字体渲染 |
 

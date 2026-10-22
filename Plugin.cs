@@ -21,9 +21,9 @@ internal static class PluginInfo
 {
     public const string PLUGIN_GUID = "dev.sprocket.translation";
     public const string PLUGIN_NAME = "SprocketTranslation";
-    public const string PLUGIN_VERSION = "1.4.3";
+    public const string PLUGIN_VERSION = "1.4.9";
     public const string AUTHOR_ZH = "七夜已逝";
-    public const string AUTHOR_EN = "Sevenight";
+    public const string AUTHOR_EN = "七夜已逝";
 }
 
 /// <summary>
@@ -36,7 +36,7 @@ internal static class PluginInfo
 ///   &lt;游戏根目录&gt;\Translations\
 ///   &lt;游戏根目录&gt;\BepInEx\Translations\
 ///
-/// 中文字体：从 TTF 文件（Alibaba-PuHuiTi-Medium.ttf）创建，运行时生成 TMP 字体
+/// 中文字体：从 TTF 文件（默认 Alibaba-PuHuiTi-Regular.ttf）创建，运行时生成 TMP 字体
 /// （atlas 完整，中文可正常渲染），设置 TMP 默认字体 + 全局回退。
 /// </summary>
 [BepInPlugin(PluginInfo.PLUGIN_GUID, PluginInfo.PLUGIN_NAME, PluginInfo.PLUGIN_VERSION)]
@@ -68,6 +68,7 @@ public sealed class Plugin : BasePlugin
     private static ConfigEntry<bool>? CfgTranslationEnabled;
     private static ConfigEntry<bool>? CfgExtractionMode;
     private static ConfigEntry<bool>? CfgFormatHooks;
+    private static ConfigEntry<bool>? CfgBakedText;
     private static ConfigEntry<bool>? CfgReplaceDefaultFont;
     private static ConfigEntry<string>? CfgFontFile;
     private static ConfigEntry<string>? CfgFallbackFontNames;
@@ -130,8 +131,13 @@ public sealed class Plugin : BasePlugin
         CfgFormatHooks = Config.Bind("General", "FormatHooksEnabled", true,
             "是否钩住 TMP SetText(string,float/bool...) 格式重载（翻译 Weight: {0} 这类动态文本）。\n" +
             "若怀疑蓝图/零件界面卡顿由翻译钩子引起，可设为 false 单独排除（普通文本翻译不受影响）。");
-        CfgFontFile = Config.Bind("Font", "FontFile", "Alibaba-PuHuiTi-Medium.ttf",
-            "中文字体来源（默认 Alibaba-PuHuiTi-Medium.ttf=补丁 Fonts 文件夹内置的阿里巴巴普惠体，随补丁分发，正常无需改动）。\n" +
+        CfgBakedText = Config.Bind("General", "TranslateBakedText", true,
+            "是否翻译「预置在场景/预制体里的文本」。这类标签在代码里从不调用文本接口，只随组件启用一次（Awake/OnEnable），\n" +
+            "所以只钩 set_text 的方案看不见它们——新建阵营弹窗的 Faction name / Design name prefix / Starter blueprints 就是这样漏网的。\n" +
+            "true=组件启用时读一次当前文本再查字典；false=完全不挂这些钩子（不产生任何启动与启用开销）。");
+        CfgFontFile = Config.Bind("Font", "FontFile", "Alibaba-PuHuiTi-Regular.ttf",
+            "中文字体来源（默认 Alibaba-PuHuiTi-Regular.ttf=补丁 Fonts 文件夹内置的阿里巴巴普惠体常规字重，随补丁分发，正常无需改动）。\n" +
+            "自带两份可选：Regular（常规，默认）与 Medium（稍粗）。老配置里填的 Medium 会自动改用 Regular，想要粗一点手动把值改回 Medium 即可。\n" +
             "可填：Fonts/游戏根目录/BepInEx 下的 TTF 文件名或路径、Unity 6 TMP 字体资源包名（如 guzhanhei 6000 / ark-pixel 6000）、\n" +
             "或系统字体名（如 SimHei；机器支持时可省字体文件，但动态字体在部分机器会缺字变方框，不推荐）。");
         CfgFallbackFontNames = Config.Bind("Font", "FallbackFontNames", "Microsoft YaHei,SimHei,SimSun,NSimSun,Noto Sans SC",
@@ -145,13 +151,27 @@ public sealed class Plugin : BasePlugin
         if (extractionMode)
             InitExtractionFile();
 
+        // #81 A：分段计时。这一段一共五处可能吃时间的地方，先只做测量、不改任何行为（改顺序或改懒加载都会踩注释里写着的旧坑）。
+        long stageMark = loadStartMs;
+        var timings = new List<string>();
+        void Mark(string stage)
+        {
+            long now = Environment.TickCount64;
+            timings.Add($"{stage} {now - stageMark}ms");
+            stageMark = now;
+        }
+
         TryLoadCjkFont();
+        Mark("字体创建");
 
         int count = LoadTranslations();
+        Mark("词条解码");
         Log.LogInfo($"Loaded {count} translations.");
         BuildWildcardCache();
+        Mark("通配缓存");
 
         int hooked = PatchTextSetters();
+        Mark("文本挂点");
         Log.LogInfo($"Hooked {hooked} text entry points.");
 
         // Load 运行在 Unity 主线程：立即加载中文字体（原为首次设置文本时触发，改为启动即加载更稳定）
@@ -163,16 +183,19 @@ public sealed class Plugin : BasePlugin
         {
             LogSource.LogWarning($"Font load error at startup (will retry on first text set): {ex.Message}");
         }
+        Mark("主线程字体");
 
         // 字体创建在词条加载之后：此处把全部词条用字一次性烘进动态图集（修复部件名生僻字方框）
         PopulateFontFromTranslations();
+        Mark("词条烘图集");
 
         if (count == 0)
         {
             Log.LogWarning("No translations loaded (embedded resource empty and no external .txt found).");
         }
 
-        Log.LogInfo($"[timing] Plugin load done: total {Environment.TickCount64 - loadStartMs}ms " +
+        Log.LogDebug($"[timing] load {Environment.TickCount64 - loadStartMs}ms" +
+                    (timings.Count == 0 ? "" : $"（另 {Environment.TickCount64 - stageMark}ms 在收尾）") + $"｜{string.Join("｜", timings)}｜" +
                     $"(translation files {count}, hooks {PatchedMethods.Count}, neg-cache formats {NoMatchFormats.Count}). " +
                     "Compare with the same game boot without the plugin to measure mod cost.");
     }
@@ -183,7 +206,7 @@ public sealed class Plugin : BasePlugin
     {
         var fontFile = CfgFontFile?.Value?.Trim();
         if (string.IsNullOrEmpty(fontFile))
-            fontFile = "Alibaba-PuHuiTi-Medium.ttf";
+            fontFile = DefaultBundledFont;
 
         // 依次尝试：原样（绝对/相对）、游戏根目录、游戏根目录\Fonts、BepInEx 根目录
         var candidates = new List<string>();
@@ -203,8 +226,8 @@ public sealed class Plugin : BasePlugin
         {
             if (File.Exists(cand))
             {
-                ttfFontPath = cand;
-                LogSource.LogInfo($"Using Chinese font: {cand} (loaded on main thread at startup)");
+                ttfFontPath = PreferThinnerBundled(cand);
+                LogSource.LogInfo($"Using Chinese font: {ttfFontPath} (loaded on main thread at startup)");
                 return;
             }
         }
@@ -213,8 +236,8 @@ public sealed class Plugin : BasePlugin
         // 若补丁自带字体文件存在则优先用自带（用户显式选其它字体名不受影响）。
         if (string.Equals(fontFile, "Microsoft YaHei", StringComparison.OrdinalIgnoreCase))
         {
-            var bundled = Path.Combine(Paths.GameRootPath, "Fonts", "Alibaba-PuHuiTi-Medium.ttf");
-            if (File.Exists(bundled))
+            var bundled = BundledFontPath();
+            if (bundled != null)
             {
                 ttfFontPath = bundled;
                 LogSource.LogInfo($"Migrating legacy default font \"Microsoft YaHei\" to bundled font: {bundled}");
@@ -231,6 +254,36 @@ public sealed class Plugin : BasePlugin
         }
 
         LogSource.LogWarning($"Font file not found: {fontFile} (tried {candidates.Count} locations). Check cfg FontFile or put the font in the game folder.");
+    }
+
+    private const string DefaultBundledFont = "Alibaba-PuHuiTi-Regular.ttf";
+    private const string LegacyBundledFont = "Alibaba-PuHuiTi-Medium.ttf";
+
+    /// <summary>自带字体路径：优先常规字重，找不到再退回历史默认的中字重。</summary>
+    private static string? BundledFontPath()
+    {
+        var fonts = Path.Combine(Paths.GameRootPath, "Fonts");
+        var regular = Path.Combine(fonts, DefaultBundledFont);
+        if (File.Exists(regular))
+            return regular;
+        var medium = Path.Combine(fonts, LegacyBundledFont);
+        return File.Exists(medium) ? medium : null;
+    }
+
+    /// <summary>字重换细：小字号下 Medium 看着发粗、发虚（用户反馈）。解析结果正好是历史默认值
+    /// Medium 时改走同目录的 Regular；显式填别的字体不受影响，想要粗一点把 cfg 改回 Medium 即可。</summary>
+    private static string PreferThinnerBundled(string resolvedPath)
+    {
+        if (!string.Equals(Path.GetFileName(resolvedPath), LegacyBundledFont, StringComparison.OrdinalIgnoreCase))
+            return resolvedPath;
+        var dir = Path.GetDirectoryName(resolvedPath);
+        if (string.IsNullOrEmpty(dir))
+            return resolvedPath;
+        var thinner = Path.Combine(dir, DefaultBundledFont);
+        if (!File.Exists(thinner))
+            return resolvedPath;
+        LogSource.LogInfo($"Prefer thinner bundled font: {LegacyBundledFont} -> {DefaultBundledFont}");
+        return thinner;
     }
 
     /// <summary>主线程（Postfix）调用：创建中文字体（只执行一次）。</summary>
@@ -1122,7 +1175,7 @@ public sealed class Plugin : BasePlugin
             else
             {
                 File.WriteAllText(extractionFilePath,
-                    "# 由 SprocketTranslation（汉化：七夜已逝 / Sevenight）自动提取的未翻译原文，每行一条；“=”后填上译文即可生效。数字已替换为 {{A}} 占位符（如 “燃料：{{A}}”）。\n",
+                    "# 由 SprocketTranslation（汉化：七夜已逝）自动提取的未翻译原文，每行一条；“=”后填上译文即可生效。数字已替换为 {{A}} 占位符（如 “燃料：{{A}}”）。\n",
                     new UTF8Encoding(false));
             }
             LogSource.LogInfo($"Text extraction ready: {extractionFilePath} ({ExtractedKeys.Count} entries)");
@@ -1195,10 +1248,53 @@ public sealed class Plugin : BasePlugin
         // 游戏里大量动态文本（如部件统计、Faction）走这里，不钩则无法翻译
         hooked += PatchFormattedSetText("TMPro.TMP_Text");
 
+        // 预置文本（场景/预制体里序列化的 m_text）：代码从不调用文本接口，只在组件启用时出现一次，
+        // 上面几个钩子永远看不见它（新建阵营弹窗的标签就是这样漏网的）。这里补挂 Awake/OnEnable。
+        if (CfgBakedText?.Value != false)
+        {
+            foreach (var typeName in new[] { "TMPro.TMP_Text", "TMPro.TextMeshProUGUI", "TMPro.TextMeshPro", "UnityEngine.UI.Text" })
+            {
+                hooked += TryPatchLifecycle(typeName, "Awake");
+                hooked += TryPatchLifecycle(typeName, "OnEnable");
+            }
+        }
+        else
+            Log.LogInfo("Baked text hooks disabled by cfg (TranslateBakedText=false).");
+
         return hooked;
     }
 
-    /// <summary>钩住 TMP_Text 的 SetText(string, params) 格式重载（2..10 参数、首参 string、其余 float/bool）。</summary>
+    /// <summary>挂组件生命周期方法（Awake/OnEnable）， postfix 里读当前文本再查字典。</summary>
+    private int TryPatchLifecycle(string typeName, string methodName)
+    {
+        var type = SafeType(typeName);
+        if (type == null)
+            return 0;
+
+        // 只看该类型自己声明的，避免拿到继承来的方法后与基类钩子重复计数
+        var method = AccessTools.Method(type, methodName);
+        if (method == null || method.DeclaringType != type)
+            return 0;
+
+        if (!PatchedMethods.Add(method))
+            return 0;
+
+        try
+        {
+            harmony.Patch(method, postfix: new HarmonyMethod(typeof(Plugin).GetMethod(
+                nameof(TranslateBakedTextPostfix), BindingFlags.Static | BindingFlags.NonPublic)));
+            Log.LogDebug($"Hooked {type.FullName}.{methodName} (baked text).");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning($"Hook {type.FullName}.{methodName} (baked text) failed: {ex.Message}");
+            return 0;
+        }
+    }
+
+    /// <summary>钩住 TMP_Text 的 SetText(string, float...) 格式重载（2..10 参数、首参 string、其余全为 float）。
+    /// 不钩 (string, bool) —— 那是 syncTextInputBox 开关，不是格式文本；它带默认参数，Harmony 侧会 IL Compile Error。</summary>
     private int PatchFormattedSetText(string typeName)
     {
         int hooked = 0;
@@ -1220,12 +1316,11 @@ public sealed class Plugin : BasePlugin
                 continue;
             if (ps[0].ParameterType != typeof(string))
                 continue;
-            // 其余参数 float/bool
+            // 其余参数必须全是 float（bool 重载是 syncTextInputBox，不是格式文本，且会编译失败）
             bool formatArgs = true;
             for (int i = 1; i < ps.Length; i++)
             {
-                var pt = ps[i].ParameterType;
-                if (pt != typeof(float) && pt != typeof(bool))
+                if (ps[i].ParameterType != typeof(float))
                 {
                     formatArgs = false;
                     break;
@@ -1246,7 +1341,7 @@ public sealed class Plugin : BasePlugin
             }
         }
         if (hooked > 0)
-            Log.LogInfo($"Hooked {hooked} TMP SetText format overloads.");
+            Log.LogDebug($"Hooked {hooked} TMP SetText format overloads.");
         return hooked;
     }
 
@@ -1298,12 +1393,18 @@ public sealed class Plugin : BasePlugin
             harmony.Patch(
                 target,
                 postfix: new HarmonyMethod(typeof(Plugin).GetMethod(nameof(TranslatePostfix), BindingFlags.Static | BindingFlags.NonPublic)));
-            Log.LogInfo($"Hooked {target.DeclaringType?.FullName}.{target.Name}.");
+            Log.LogDebug($"Hooked {target.DeclaringType?.FullName}.{target.Name}.");
             return 1;
         }
         catch (Exception ex)
         {
-            Log.LogWarning($"Hook {target.DeclaringType?.FullName}.{target.Name} failed: {ex.Message}");
+            // 旧版 TextMesh 的 set_text 方法体里有 fixed(ReadOnlySpan<char>) 的 pin 块，
+            // Harmony 的 IL 编译器在这版运行时上过不去（同一类 class 化 span 问题，见装甲黎明 1.0.2 的音频判死）。
+            // 游戏正文走 TMP，legacy TextMesh 很少；这一条降成 Info，避免每次启动都像出错。
+            if (target.DeclaringType?.FullName == "UnityEngine.TextMesh")
+                Log.LogInfo($"TextMesh.set_text 跳过（TMP 已覆盖）");
+            else
+                Log.LogWarning($"Hook {target.DeclaringType?.FullName}.{target.Name} failed: {ex.Message}");
             return 0;
         }
     }
@@ -1440,6 +1541,38 @@ public sealed class Plugin : BasePlugin
         catch (Exception ex)
         {
             LogSource.LogDebug($"Formatted override error: {ex.Message}");
+        }
+    }
+
+    /// <summary>Harmony Postfix：组件启用（Awake/OnEnable）时翻译「已烘焙在场景/预制体里的文本」。
+    /// 这类标签全程不调用文本接口，只随组件启用出现一次，故必须在此主动读取一次当前文本。</summary>
+    private static void TranslateBakedTextPostfix(object __instance)
+    {
+        try
+        {
+            if (applyingTranslation)
+                return;
+
+            var type = __instance.GetType();
+            if (!TextReadCache.TryGetValue(type, out var read))
+            {
+                read = CompileTextReader(type);
+                TextReadCache[type] = read!;
+            }
+            if (read == null)
+                return;
+
+            string? current;
+            try { current = read(__instance); }
+            catch { return; }
+            if (string.IsNullOrEmpty(current))
+                return;
+
+            TranslatePostfixInner(__instance, current);
+        }
+        catch (Exception ex)
+        {
+            LogSource.LogDebug($"Baked text translation error: {ex.Message}");
         }
     }
 
